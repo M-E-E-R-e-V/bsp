@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Meer-Map</title>
+		<link rel="stylesheet" href="js/jquery.mobile/jquery.mobile-1.4.5.min.css">
+		<script src="js/jquery/jquery.js"></script>
+		<script src="js/jquery.mobile/jquery.mobile-1.4.5.min.js"></script>
+		<script src="js/openlayer/OpenLayers.js"></script>
+		<script src="js/openlayer/grid_wgs.js"></script>
+		<script src="js/triangle.solver.js"></script>
+	</head>
+	<body>
+		<div data-role="page" id="map">
+			<div data-role="header">
+				<h1>Main-Map</h1>
+			</div>
+			<div role="main" class="ui-content">
+				<div>
+					<label for="locaction">Station Location:</label>
+					<input type="text" name="station_locaction" id="locaction" value="" disabled="disabled">
+				</div>
+				<div>
+					<label for="rotation_compass">Compass rotation (degree):</label>
+					<input type="range" name="rotation_compass" id="rotation_compass" value="208" min="0" max="360" step="0.01" data-highlight="true">
+				</div>
+				<div>
+					<label for="rotation_height">Height rotation (degree):</label>
+					<input type="range" name="rotation_height" id="rotation_height" value="85" min="0" max="90" step="0.01" data-highlight="true">
+				</div>
+				<div>
+					<label for="number-pattern">View height (meter):</label>
+					<input type="number" name="view_height" pattern="[0-9]*" id="view_height" value="300">
+				</div>
+				<div>
+					<label for="tolocaction">Looking to Location:</label>
+					<input type="text" name="to_location" id="tolocaction" value="" disabled="disabled">
+				</div>
+				<div id="mapview" class="map" style="width: 100%; height: 400px"></div>
+			</div>
+		</div>
+
+
+		<script type="text/javascript">
+			var map = null;
+
+			jQuery(document).ready(function() {
+				var projMerc = new OpenLayers.Projection("EPSG:900913");
+				var proj4326 = new OpenLayers.Projection("EPSG:4326");
+
+				var crisviewpos = new OpenLayers.LonLat(-17.314608, 28.067808);
+				crisviewpos.transform(proj4326, projMerc);
+
+				map = new OpenLayers.Map("mapview", {
+					projection        : projMerc,
+					displayProjection : proj4326,
+					});
+
+				var layer_mapnik = new OpenLayers.Layer.XYZ('Mapnik', [
+						'http://a.tile.openstreetmap.org/${z}/${x}/${y}.png',
+						'http://b.tile.openstreetmap.org/${z}/${x}/${y}.png',
+						'http://c.tile.openstreetmap.org/${z}/${x}/${y}.png'
+					],{
+						layerId      : 1,
+						wrapDateLine : true
+					});
+
+				var layer_gebco_deeps_gwc = new OpenLayers.Layer.WMS("deeps_gwc",
+					"http://osm.franken.de:8080/geoserver/gwc/service/wms",
+                    {layers: "gebco_2014", format:"image/png"},
+                    { layerId: 6, isBaseLayer: false, visibility: true, opacity: 0.8});
+
+				// Grid WGS
+				var layer_grid = new OpenLayers.Layer.GridWGS("coordinateGrid", {
+						layerId: 10,
+						visibility: true
+					});
+
+				var station = new OpenLayers.Layer.Markers( "Station" );
+				var lookingTo = new OpenLayers.Layer.Markers( "LookinTo" );
+				var polygonLayer = new OpenLayers.Layer.Vector("Polygon Layer");
+
+				// -------------------------------------------------------------
+
+				map.addLayers([layer_mapnik, layer_gebco_deeps_gwc, layer_grid, polygonLayer, station, lookingTo]);
+
+				map.addControl(new OpenLayers.Control.LayerSwitcher());
+				map.addControl(new OpenLayers.Control.ScaleLine({topOutUnits : "nmi", bottomOutUnits: "km", topInUnits: 'nmi', bottomInUnits: 'km', maxWidth: '40'}));
+				map.addControl(new OpenLayers.Control.OverviewMap());
+
+				map.setCenter(crisviewpos, 12);
+
+				// -------------------------------------------------------------
+
+				var size	= new OpenLayers.Size(21,25);
+				var offset	= new OpenLayers.Pixel(-(size.w/2), -size.h);
+				var icon	= new OpenLayers.Icon('images/marker-48.png',size,offset);
+
+				// -------------------------------------------------------------
+
+				station.addMarker(new OpenLayers.Marker(crisviewpos, icon));
+
+				var directionFinding = function(lonLat, radius, azimuth) {
+					if( azimuth == 90 ) {
+						azimuth = azimuth - 0.1;
+					}
+
+					var hAdd		= true;
+					var wAdd		= true;
+					var subRotation 	= 0;
+
+					if( azimuth <= 90 ) {
+						wAdd = false;
+					}
+					else if( azimuth <= 180 ) {
+						subRotation = 90;
+						hAdd = false;
+						wAdd = false;
+					}
+					else if( azimuth <= 270 ) {
+						subRotation = 180;
+						hAdd = false;
+					}
+					else {
+						subRotation = 270;
+					}
+
+					var lat = 0;
+					var lon = 0;
+
+					try {
+						var triangleReturnC = solveTriangle(
+							radius, null, null, 90, null,
+							(azimuth-subRotation)
+							);
+
+						if( hAdd && !wAdd ) {
+							lat = lonLat.lat + triangleReturnC[1];
+							lon = lonLat.lon + triangleReturnC[2];
+						}
+						else if( !hAdd && !wAdd ) {
+							lat = lonLat.lat - triangleReturnC[2];
+							lon = lonLat.lon + triangleReturnC[1];
+						}
+						else if( !hAdd && wAdd ) {
+							lat = lonLat.lat - triangleReturnC[1];
+							lon = lonLat.lon - triangleReturnC[2];
+						}
+						else if( hAdd && wAdd ) {
+							lat = lonLat.lat + triangleReturnC[2];
+							lon = lonLat.lon - triangleReturnC[1];
+						}
+					}
+					catch( error ) {
+						lat = lonLat.lat;
+						lon = lonLat.lon;
+
+						if( (azimuth == 0) || (azimuth == 360) ) {
+							lat = lat + radius;
+						}
+						else if( azimuth == 90 ) {
+							lon = lon + radius;
+						}
+						else if( azimuth == 180 ) {
+							lat = lat - radius;
+						}
+						else if( azimuth == 270 ) {
+							lon = lon - radius;
+						}
+					}
+
+					var point = new OpenLayers.LonLat(lon, lat);					
+
+					return point;
+				};
+
+				var createCircle = function(distance, despoint) {
+						polygonLayer.destroyFeatures();
+
+						var pCenter = new OpenLayers.Geometry.Point(crisviewpos.lon, crisviewpos.lat);
+						var circle = OpenLayers.Geometry.Polygon.createRegularPolygon(pCenter, distance, 70, 0);
+						var circleFeature = new OpenLayers.Feature.Vector(circle);
+						var endPoint = new OpenLayers.Geometry.Point(despoint.lon, despoint.lat);
+
+						var radius = new OpenLayers.Geometry.LineString([pCenter, endPoint]);
+
+						var len = Math.round(radius.getLength()).toString();
+
+						var punktstyle = {
+							strokeColor: "red",
+							strokeWidth: 2,
+							pointRadius: 5,
+							fillOpacity: 0.2
+							};
+
+						
+						var style = {
+							strokeColor: "#0500bd",
+							strokeWidth: 3,
+							label: len + " m",
+							labelAlign: "left",
+							labelXOffset: "20",
+							labelYOffset: "10",
+							labelOutlineColor: "white",
+							labelOutlineWidth: 3
+							};
+						
+					   	var fea = new OpenLayers.Feature.Vector(radius, {'length': len}, style);
+						var punkt1 = new OpenLayers.Feature.Vector(pCenter, {}, punktstyle);
+
+						polygonLayer.addFeatures([circleFeature, punkt1, fea]);
+					};
+
+
+				var onChangeRotation = function() {
+						var rotationCompass 	= jQuery('#rotation_compass').val();
+						var rotationHeight	= jQuery('#rotation_height').val();
+						var viewHeight		= jQuery('#view_height').val();
+
+						if( rotationHeight == 90 ) {
+							rotationHeight = rotationHeight - 0.1;
+						}
+
+						var triangleReturn = solveTriangle(null, viewHeight, null, rotationHeight, null, 90);
+						var distanceOnWater = triangleReturn[0];
+
+						var desPoint = directionFinding(crisviewpos, distanceOnWater, rotationCompass);
+
+						createCircle(distanceOnWater, desPoint);
+
+						lookingTo.clearMarkers();
+						lookingTo.addMarker(new OpenLayers.Marker(desPoint, icon.clone()));
+
+						var lonlat1 = crisviewpos.clone().transform(projMerc, proj4326);
+						var lonlat2 = desPoint.clone().transform(projMerc, proj4326);
+
+						jQuery('#locaction').val(parseFloat(lonlat1.lat).toFixed(5) + " N, " + parseFloat(lonlat1.lon).toFixed(5) + " E");
+						jQuery('#tolocaction').val(parseFloat(lonlat2.lat).toFixed(5) + " N, " + parseFloat(lonlat2.lon).toFixed(5) + " E");
+
+					};
+
+				jQuery('#rotation_compass').change(onChangeRotation);
+				jQuery('#rotation_height').change(onChangeRotation);
+				jQuery('#view_height').change(onChangeRotation);
+
+				onChangeRotation();
+			});
+		</script>
+	</body>
+</html>
